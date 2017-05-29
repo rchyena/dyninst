@@ -87,6 +87,7 @@ MachRegister MachRegister::getBaseRegister() const {
          return *this;
 		case Arch_aarch32:
 		case Arch_aarch64:
+      case Arch_ptx:
 				  //not verified
 		   return *this;
    }
@@ -213,6 +214,8 @@ unsigned int MachRegister::size() const {
 			}
 		else
 			return 4;
+      case Arch_ptx:
+         return 8;
       case Arch_none:
          return 0;
    }
@@ -251,6 +254,8 @@ MachRegister MachRegister::getPC(Dyninst::Architecture arch)
       case Arch_aarch64:  //aarch64: pc is not writable
          return aarch64::pc;
       case Arch_aarch32:
+         assert(0);
+      case Arch_ptx:
          assert(0);
       case Arch_none:
          return InvalidReg;

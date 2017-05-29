@@ -256,6 +256,21 @@ class stab_entry_64 : public stab_entry {
 
 // end of stab declarations
 
+// CUDA Fat Binary Structures
+struct fatbin_entry_t {
+    unsigned int type;
+    std::string name;
+    unsigned int offset;
+    unsigned int size;
+    unsigned int arch;
+    void* data;
+};
+
+#define FATBIN_ENTRY_PTX 0x1
+#define FATBIN_ENTRY_ELF 0x2
+
+// End of CUDA Fat Binary declarations.
+
 class pdElfShdr;
 class Symtab;
 class Region;
@@ -464,6 +479,11 @@ class Object;
   unsigned  stab_indx_size_;	 // .stab.index section
   Offset   stabstr_indx_off_;	 // .stabstr.index section
 
+  Offset   fatbin_addr_;
+  unsigned fatbin_size_;
+  Offset   fatbin_seg_addr_;
+  unsigned fatbin_seg_size_;
+
   bool      dwarvenDebugInfo;    // is DWARF debug info present?
   Offset   loadAddress_;      // The object may specify a load address
                                //   Set to 0 if it may load anywhere
@@ -513,6 +533,7 @@ class Object;
 		    Elf_X_Shdr*& dynstr_scnp, Elf_X_Shdr*& dynamic_scnp, Elf_X_Shdr*& eh_frame,
 		    Elf_X_Shdr*& gcc_except, Elf_X_Shdr *& interp_scnp,
 		   Elf_X_Shdr *&opd_scnp,
+                   Elf_X_Shdr*& fatbin_scnp, Elf_X_Shdr*& fatbin_seg_scnp,
           bool a_out=false);
   
   Symbol *handle_opd_symbol(Region *opd, Symbol *sym);
@@ -595,7 +616,17 @@ class Object;
   std::vector<std::pair<long, long> > new_dynamic_entries;
  private:
   const char* soname_;
-  
+
+  // CUDA fat binary handling.
+ public:
+  bool isFatBinary() { return fatbin_entry.size() > 0; };
+  bool hasPTX() { return fatbin_has_ptx; }
+      
+ private:
+  std::vector<fatbin_entry_t> fatbin_entry;
+  bool fatbin_has_ptx;
+
+  void parse_fatbin(Elf_X_Shdr *);
 };
 
 }//namespace SymtabAPI

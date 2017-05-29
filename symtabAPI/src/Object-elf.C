@@ -319,7 +319,8 @@ const char* DYNAMIC_NAME     = ".dynamic";
 const char* EH_FRAME_NAME    = ".eh_frame";
 const char* EXCEPT_NAME      = ".gcc_except_table";
 const char* EXCEPT_NAME_ALT  = ".except_table";
-
+const char* FATBIN_NAME      = ".nv_fatbin"; // Nvidia Fat Binary Section
+const char* FATBIN_SEG_NAME  = ".nvFatBinSegment";
 
 extern template
 class Dyninst::SymtabAPI::emitElf<ElfTypes32>;
@@ -342,6 +343,7 @@ bool Object::loaded_elf(Offset& txtaddr, Offset& dataddr,
                         Elf_X_Shdr*& dynstr_scnp, Elf_X_Shdr* &dynamic_scnp,
                         Elf_X_Shdr*& eh_frame, Elf_X_Shdr*& gcc_except,
                         Elf_X_Shdr *& interp_scnp, Elf_X_Shdr *& opd_scnp,
+                        Elf_X_Shdr*& fatbin_scnp, Elf_X_Shdr*& fatbin_seg_scnp,
                         bool)
 {
     std::map<std::string, int> secnNameMap;
@@ -882,6 +884,11 @@ bool Object::loaded_elf(Offset& txtaddr, Offset& dataddr,
         else if ((int) i == dynamic_section_index) {
             dynamic_scnp = scnp;
             dynamic_addr_ = scn.sh_addr();
+        }
+        else if (strcmp(name, FATBIN_NAME) == 0) {
+            fatbin_scnp = scnp;
+            fatbin_addr_ = scn.sh_addr();
+            fatbin_size_ = scn.sh_size();
         }
     }
 
@@ -1499,6 +1506,8 @@ void Object::load_object(bool alloc_syms)
     Elf_X_Shdr *gcc_except = 0;
     Elf_X_Shdr *interp_scnp = 0;
     Elf_X_Shdr *opd_scnp = NULL;
+    Elf_X_Shdr *fatbin_scnp = NULL;
+    Elf_X_Shdr *fatbin_seg_scnp = NULL;
 
     { // binding contour (for "goto cleanup")
 
@@ -1523,7 +1532,7 @@ void Object::load_object(bool alloc_syms)
                         stabscnp, stabstrscnp, stabs_indxcnp, stabstrs_indxcnp,
                         rel_plt_scnp, plt_scnp, got_scnp, dynsym_scnp, dynstr_scnp,
                         dynamic_scnp, eh_frame_scnp,gcc_except, interp_scnp,
-                        opd_scnp, true))
+                        opd_scnp, fatbin_scnp, fatbin_seg_scnp, true))
         {
             goto cleanup;
         }
@@ -1676,6 +1685,10 @@ void Object::load_object(bool alloc_syms)
 	    // Add a single global TOC value...
 	}
 
+        if (fatbin_scnp) {
+            parse_fatbin(fatbin_scnp);
+        }
+
         return;
     } // end binding contour (for "goto cleanup2")
 
@@ -1709,6 +1722,8 @@ void Object::load_shared_object(bool alloc_syms)
     Elf_X_Shdr *gcc_except = 0;
     Elf_X_Shdr *interp_scnp = 0;
     Elf_X_Shdr *opd_scnp = NULL;
+    Elf_X_Shdr *fatbin_scnp = NULL;
+    Elf_X_Shdr *fatbin_seg_scnp = NULL;
 
     { // binding contour (for "goto cleanup2")
 
@@ -1721,7 +1736,7 @@ void Object::load_shared_object(bool alloc_syms)
         if (!loaded_elf(txtaddr, dataddr, bssscnp, symscnp, strscnp,
                         stabscnp, stabstrscnp, stabs_indxcnp, stabstrs_indxcnp,
                         rel_plt_scnp, plt_scnp, got_scnp, dynsym_scnp, dynstr_scnp,
-                        dynamic_scnp, eh_frame_scnp, gcc_except, interp_scnp, opd_scnp))
+                        dynamic_scnp, eh_frame_scnp, gcc_except, interp_scnp, opd_scnp, fatbin_scnp, fatbin_seg_scnp))
             goto cleanup2;
 
         if (interp_scnp)
@@ -2917,6 +2932,8 @@ Object::Object(MappedFile *mf_, bool, void (*err_func)(const char *),
         opd_addr_(0), opd_size_(0),
         stab_off_(0), stab_size_(0), stabstr_off_(0),
         stab_indx_off_(0), stab_indx_size_(0), stabstr_indx_off_(0),
+        fatbin_addr_(0), fatbin_size_(0),
+        fatbin_seg_addr_(0), fatbin_seg_size_(0),
         dwarvenDebugInfo(false),
         loadAddress_(0), entryAddress_(0),
         interpreter_name_(NULL),
@@ -2925,7 +2942,8 @@ Object::Object(MappedFile *mf_, bool, void (*err_func)(const char *),
         EEL(false), did_open(false),
         obj_type_(obj_Unknown),
         DbgSectionMapSorted(false),
-        soname_(NULL)
+        soname_(NULL),
+        fatbin_has_ptx(false)
 {
 
 #if defined(TIMED_PARSE)
@@ -5197,3 +5215,89 @@ std::string Object::getFileName() const
     return mf->filename();
 }
 
+// === Nvidia fat binary handling routines. ===
+
+struct fatbin_header_t {
+    unsigned long magic;
+    unsigned long datalen;
+};
+#define FATBIN_MAGIC       0x00100001ba55ed50UL
+#define FATBIN_HEADER_SIZE 16
+
+struct fatbin_entry_header_t {
+    unsigned long type;
+    unsigned long datalen;
+    unsigned long unknown1;
+    unsigned int  unknown2;
+    unsigned int  arch;
+};
+#define FATBIN_ENTRY_TYPE_PTX_MASK    1
+#define FATBIN_ENTRY_TYPE_ELF_MASK    2
+#define FATBIN_ENTRY_PTX_HEADER_SIZE 72
+#define FATBIN_ENTRY_ELF_HEADER_SIZE 64
+
+void Object::parse_fatbin(Elf_X_Shdr* fatbin_hdr)
+{
+    assert(fatbin_hdr);
+    Elf_X_Data data = fatbin_hdr->get_data();
+    assert(data.isValid());
+
+    unsigned char* buf = (unsigned char*)data.d_buf();
+    unsigned char* ptr = buf;
+    unsigned char* section_end = buf + fatbin_size_;
+    unsigned int   ptx_count = 0;
+    unsigned int   elf_count = 0;
+
+    while (ptr < section_end) {
+        fatbin_header_t* header = (fatbin_header_t*)ptr;
+        if (header->magic != FATBIN_MAGIC) {
+            create_printf("%s[%d]:  Incorrect Fatbin header detected.\n",
+                          FILE__, __LINE__);
+            return;
+        }
+
+        ptr += FATBIN_HEADER_SIZE;
+        unsigned char* entry_end = ptr + header->datalen;
+
+        while (ptr < entry_end) {
+            fatbin_entry_header_t* entryHeader = (fatbin_entry_header_t*)ptr;
+            fatbin_entry_t         entry;
+
+            if (entryHeader->type & FATBIN_ENTRY_TYPE_PTX_MASK) {
+                ++ptx_count;
+                entry.type = FATBIN_ENTRY_PTX;
+                entry.data = ptr + FATBIN_ENTRY_PTX_HEADER_SIZE;
+                entry.size = entryHeader->datalen;
+                entry.arch = entryHeader->arch;
+                entry.name =
+                    mf->filename() + "." +
+                    std::to_string(ptx_count) +
+                    ".sm_" + std::to_string(entry.arch) + ".ptx";
+                ptr += FATBIN_ENTRY_PTX_HEADER_SIZE + entryHeader->datalen;
+            }
+            else if (entryHeader->type & FATBIN_ENTRY_TYPE_ELF_MASK) {
+                ++elf_count;
+                entry.type = FATBIN_ENTRY_ELF;
+                entry.data = ptr + FATBIN_ENTRY_ELF_HEADER_SIZE;
+                entry.size = entryHeader->datalen;
+                entry.arch = entryHeader->arch;
+                entry.name =
+                    mf->filename() + "." +
+                    std::to_string(elf_count) +
+                    ".sm_" + std::to_string(entry.arch) + ".cubin";
+                ptr += FATBIN_ENTRY_ELF_HEADER_SIZE + entryHeader->datalen;
+            }
+            else {
+                create_printf("%s[%d]:  Incorrect Fatbin header detected.\n",
+                              FILE__, __LINE__);
+                return;
+            }
+            fatbin_entry.push_back(entry);
+        }
+    }
+
+    if (ptx_count > 0)
+        fatbin_has_ptx = true;
+}
+
+// === End Nvidia fat binary handling routines. ===

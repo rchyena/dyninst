@@ -33,6 +33,7 @@
 #include "InstructionDecoder-x86.h"
 #include "InstructionDecoder-power.h"
 #include "InstructionDecoder-aarch64.h"
+#include "InstructionDecoder-ptx.h"
 #include "BinaryFunction.h"
 #include "Dereference.h"
 
@@ -70,6 +71,7 @@ namespace Dyninst
                 impls[Arch_ppc32] = Ptr(new InstructionDecoder_power(Arch_ppc32));
                 impls[Arch_ppc64] = Ptr(new InstructionDecoder_power(Arch_ppc64));
                 impls[Arch_aarch64] = Ptr(new InstructionDecoder_aarch64(Arch_aarch64));
+                impls[Arch_ptx] = Ptr(new InstructionDecoder_ptx(Arch_ptx));
             }
             std::map<Architecture, Ptr>::const_iterator foundImpl = impls.find(a);
             if(foundImpl == impls.end())

@@ -2201,6 +2201,10 @@ enum entryID {
   aarch64_op_yield_hint,
   aarch64_op_zip1_advsimd,
   aarch64_op_zip2_advsimd,
+
+  ptx_op_nop,
+  ptx_op_mov,
+
   _entry_ids_max_
 };
 
