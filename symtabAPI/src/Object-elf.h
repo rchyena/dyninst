@@ -621,7 +621,7 @@ class Object;
  public:
   bool isFatBinary() { return fatbin_entry.size() > 0; };
   bool hasPTX() { return fatbin_has_ptx; }
-      
+
  private:
   std::vector<fatbin_entry_t> fatbin_entry;
   bool fatbin_has_ptx;
