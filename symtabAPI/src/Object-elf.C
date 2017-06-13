@@ -2942,8 +2942,7 @@ Object::Object(MappedFile *mf_, bool, void (*err_func)(const char *),
         EEL(false), did_open(false),
         obj_type_(obj_Unknown),
         DbgSectionMapSorted(false),
-        soname_(NULL),
-        fatbin_has_ptx(false)
+        soname_(NULL)
 {
 
 #if defined(TIMED_PARSE)
@@ -5217,24 +5216,85 @@ std::string Object::getFileName() const
 
 // === Nvidia fat binary handling routines. ===
 
-struct fatbin_header_t {
-    unsigned long magic;
-    unsigned long datalen;
-};
-#define FATBIN_MAGIC       0x00100001ba55ed50UL
-#define FATBIN_HEADER_SIZE 16
+static char* extract_fatbin(std::string fatbin)
+{
+    std::string cmd = "cuobjdump --dump-ptx ";
+    FILE* fp;
+    char* buf = NULL;
+    int   buflen = 0;
+    int   readlen = 0;
 
-struct fatbin_entry_header_t {
-    unsigned long type;
-    unsigned long datalen;
-    unsigned long unknown1;
-    unsigned int  unknown2;
-    unsigned int  arch;
-};
-#define FATBIN_ENTRY_TYPE_PTX_MASK    1
-#define FATBIN_ENTRY_TYPE_ELF_MASK    2
-#define FATBIN_ENTRY_PTX_HEADER_SIZE 72
-#define FATBIN_ENTRY_ELF_HEADER_SIZE 64
+    fp = popen((cmd + fatbin).c_str(), "r");
+    if (!fp) {
+        parsing_printf("Could not launch cuobjdump. Disabling PTX parsing.\n");
+    }
+    else {
+        while ( !feof(fp) ) {
+            int   chunk;
+            int   retval;
+            int   newlen = buflen ? buflen << 1 : 4096;
+            void* newbuf = realloc(buf, newlen * sizeof(char));
+            if (!newbuf) {
+                free(buf);
+                return NULL;
+            }
+
+            buf    = reinterpret_cast<char *>(newbuf);
+            buflen = newlen;
+
+            chunk = buflen - readlen;
+            retval = fread(buf + readlen, sizeof(char), chunk, fp);
+            if (retval < chunk && ferror(fp)) {
+                free(buf);
+                return NULL;
+            }
+            readlen += retval;
+        }
+        pclose(fp);
+
+        // NULL terminate output of cuobjdump.
+        buf[readlen] = '\0';
+        buf = reinterpret_cast<char*>(realloc(buf, ++readlen * sizeof(char)));
+    }
+
+    return buf;
+}
+
+static int extract_ptx_data(char** buf, char** arch, char** ptx, int* len)
+{
+    char* ptr;
+    int   lbound, rbound;
+
+    // Find next PTX file.
+    ptr = strstr(*buf, "\nFatbin ptx ");
+    if (!ptr) {
+        *buf = ptr + strlen(ptr);
+        return 0;
+    }
+
+    // Parse subfile arch boundaries.
+    ptr = strstr(ptr, "\narch = ");
+    sscanf(ptr, " arch = %n%*s%n", &lbound, &rbound);
+    *arch = ptr + lbound;
+    ptr += rbound;
+    *(ptr++) = '\0';
+
+    // Find PTX code boundaries.
+    char* endptx = strstr(ptr, "\nFatbin");
+    if (endptx)
+        *(endptx++) = '\0';
+    else
+        endptx = ptr + strlen(ptr);
+
+    *ptx = strstr(ptr, "\n\n");
+    if (*ptx && *ptx < endptx)
+        *len = strlen( ++(*ptx) );
+    else
+        *len = 0;
+
+    *buf = endptx;
+    return 1;
+}
 
 void Object::parse_fatbin(Elf_X_Shdr* fatbin_hdr)
 {
@@ -5242,62 +5302,31 @@ void Object::parse_fatbin(Elf_X_Shdr* fatbin_hdr)
     Elf_X_Data data = fatbin_hdr->get_data();
     assert(data.isValid());
 
-    unsigned char* buf = (unsigned char*)data.d_buf();
-    unsigned char* ptr = buf;
-    unsigned char* section_end = buf + fatbin_size_;
-    unsigned int   ptx_count = 0;
-    unsigned int   elf_count = 0;
+    char* buf = extract_fatbin(mf->pathname());
+    if (!buf)
+        return;
 
-    while (ptr < section_end) {
-        fatbin_header_t* header = (fatbin_header_t*)ptr;
-        if (header->magic != FATBIN_MAGIC) {
-            create_printf("%s[%d]:  Incorrect Fatbin header detected.\n",
-                          FILE__, __LINE__);
-            return;
-        }
+    int   count = 0;
+    char* ptr   = buf;
+    char* arch;
+    char* ptx;
+    int   len;
 
-        ptr += FATBIN_HEADER_SIZE;
-        unsigned char* entry_end = ptr + header->datalen;
+    while ( extract_ptx_data(&ptr, &arch, &ptx, &len)) {
+        std::string fname = mf->filename()
+            + "." + std::to_string(++count)
+            + "." + arch + ".ptx";
 
-        while (ptr < entry_end) {
-            fatbin_entry_header_t* entryHeader = (fatbin_entry_header_t*)ptr;
-            fatbin_entry_t         entry;
-
-            if (entryHeader->type & FATBIN_ENTRY_TYPE_PTX_MASK) {
-                ++ptx_count;
-                entry.type = FATBIN_ENTRY_PTX;
-                entry.data = ptr + FATBIN_ENTRY_PTX_HEADER_SIZE;
-                entry.size = entryHeader->datalen;
-                entry.arch = entryHeader->arch;
-                entry.name =
-                    mf->filename() + "." +
-                    std::to_string(ptx_count) +
-                    ".sm_" + std::to_string(entry.arch) + ".ptx";
-                ptr += FATBIN_ENTRY_PTX_HEADER_SIZE + entryHeader->datalen;
-            }
-            else if (entryHeader->type & FATBIN_ENTRY_TYPE_ELF_MASK) {
-                ++elf_count;
-                entry.type = FATBIN_ENTRY_ELF;
-                entry.data = ptr + FATBIN_ENTRY_ELF_HEADER_SIZE;
-                entry.size = entryHeader->datalen;
-                entry.arch = entryHeader->arch;
-                entry.name =
-                    mf->filename() + "." +
-                    std::to_string(elf_count) +
-                    ".sm_" + std::to_string(entry.arch) + ".cubin";
-                ptr += FATBIN_ENTRY_ELF_HEADER_SIZE + entryHeader->datalen;
-            }
-            else {
-                create_printf("%s[%d]:  Incorrect Fatbin header detected.\n",
-                              FILE__, __LINE__);
-                return;
-            }
-            fatbin_entry.push_back(entry);
-        }
+        regions_.push_back(new Region(count,
+                                      fname,
+                                      0,
+                                      len,
+                                      0,
+                                      0,
+                                      ptx,
+                                      Region::RP_R,
+                                      Region::RT_INVALID));
     }
-
-    if (ptx_count > 0)
-        fatbin_has_ptx = true;
 }
 
 // === End Nvidia fat binary handling routines. ===

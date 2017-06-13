@@ -256,21 +256,6 @@ class stab_entry_64 : public stab_entry {
 
 // end of stab declarations
 
-// CUDA Fat Binary Structures
-struct fatbin_entry_t {
-    unsigned int type;
-    std::string name;
-    unsigned int offset;
-    unsigned int size;
-    unsigned int arch;
-    void* data;
-};
-
-#define FATBIN_ENTRY_PTX 0x1
-#define FATBIN_ENTRY_ELF 0x2
-
-// End of CUDA Fat Binary declarations.
-
 class pdElfShdr;
 class Symtab;
 class Region;
@@ -618,14 +603,7 @@ class Object;
   const char* soname_;
 
   // CUDA fat binary handling.
- public:
-  bool isFatBinary() { return fatbin_entry.size() > 0; };
-  bool hasPTX() { return fatbin_has_ptx; }
-
  private:
-  std::vector<fatbin_entry_t> fatbin_entry;
-  bool fatbin_has_ptx;
-
   void parse_fatbin(Elf_X_Shdr *);
 };
 
