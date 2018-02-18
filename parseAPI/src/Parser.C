@@ -778,13 +778,17 @@ Parser::init_frame(ParseFrame & frame)
      frame.codereg->offset() + frame.codereg->length() - ia_start;
     const unsigned char* bufferBegin =
      (const unsigned char *)(frame.func->isrc()->getPtrToInstruction(ia_start));
-    InstructionDecoder dec(bufferBegin,size,frame.codereg->getArch());
+    Architecture frameArch = frame.codereg->getArch();
+    InstructionDecoder dec(bufferBegin,size,frameArch);
     InstructionAdapter_t ah(dec, ia_start, frame.func->obj(),
         frame.codereg, frame.func->isrc(), b);
-	if(ah.isStackFramePreamble()) {
-        frame.func->_no_stack_frame = false;
-	}
-    frame.func->_saves_fp = ah.savesFP();
+
+    if (frameArch != Arch_ptx) {
+        if (ah.isStackFramePreamble()) {
+            frame.func->_no_stack_frame = false;
+        }
+        frame.func->_saves_fp = ah.savesFP();
+    }
 }
 
 void ParseFrame::cleanup()

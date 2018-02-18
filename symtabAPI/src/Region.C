@@ -416,3 +416,9 @@ bool Region::updateRelocations(Address start,
    return true;
 }
 
+void *Region::ptxPtrByIndex(Offset index) {
+    if (ptxIndexMap.find(index) != ptxIndexMap.end())
+        return (void*)ptxIndexMap[index];
+    else
+        return (void*)-1;
+}

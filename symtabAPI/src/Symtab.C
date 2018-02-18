@@ -1466,6 +1466,11 @@ bool Symtab::extractInfo(Object *linkedFile)
             hasRela_ = true;
         }
 
+        if (regions_[index]->getRegionType() == Region::RT_PTX)
+        {
+            ptxRegions_.push_back(regions_[index]);
+        }
+
 #if defined(os_linux) || defined(os_freebsd)
         hasReldyn_ = linkedFile->hasReldyn();
 	hasReladyn_ = linkedFile->hasReladyn();

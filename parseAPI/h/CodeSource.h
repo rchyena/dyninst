@@ -309,6 +309,7 @@ class PARSER_EXPORT SymtabCodeSource : public CodeSource {
     void init(hint_filt *, bool);
     void init_regions(hint_filt *, bool);
     void init_hints(dyn_hash_map<void*, CodeRegion*> &, hint_filt*);
+    void init_ptx_hints(dyn_hash_map<void*, CodeRegion*> &, hint_filt*);
     void init_linkage();
 
     CodeRegion * lookup_region(const Address addr) const;

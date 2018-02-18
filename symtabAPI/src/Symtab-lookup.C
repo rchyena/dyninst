@@ -466,6 +466,15 @@ bool Symtab::getDataRegions(std::vector<Region *>&ret)
    return false;
 }
 
+bool Symtab::getPtxRegions(std::vector<Region *>&ret)
+{
+   if (ptxRegions_.size() > 0)
+   {
+      ret = ptxRegions_;
+      return true;
+   }
+   return false;
+}
 
 bool Symtab::getAllNewRegions(std::vector<Region *>&ret)
 {
@@ -946,6 +955,9 @@ Dyninst::Offset Symtab::fileToDiskOffset(Dyninst::Offset fileOffset) const {
 
 Dyninst::Offset Symtab::fileToMemOffset(Dyninst::Offset fileOffset) const {
    for (unsigned j = 0; j < regions_.size(); ++j) {
+      if (regions_[j]->rType_ == Region::RT_PTX) {
+          
+      }
       if (regions_[j]->getFileOffset() <= fileOffset &&
           ((regions_[j]->getFileOffset() + regions_[j]->getDiskSize()) > fileOffset)) {
          return fileOffset - regions_[j]->getFileOffset() + regions_[j]->getMemOffset();

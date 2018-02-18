@@ -88,6 +88,10 @@ Function *
 CFGFactory::_mkfunc(Address addr, FuncSource src, string name, 
     CodeObject * obj, CodeRegion * reg, Dyninst::InstructionSource * isrc)
 {
+    const char* n = name.c_str();
+    if (strcmp(n, "_ZN7RADIX_M13radixM_kernelIjLj19ENS_4specEdEEv20radix_m_parameters_tIT_T2_") == 0) {
+        fprintf(stderr, "Here.\n");
+    }
    Function * ret = mkfunc(addr,src,name,obj,reg,isrc);
    funcs_.add(*ret);
    ret->_src =  src;

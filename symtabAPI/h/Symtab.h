@@ -200,6 +200,7 @@ class SYMTAB_EXPORT Symtab : public LookupInterface,
 
    bool getCodeRegions(std::vector<Region *>&ret);
    bool getDataRegions(std::vector<Region *>&ret);
+   bool getPtxRegions(std::vector<Region *>&ret);
    bool getAllRegions(std::vector<Region *>&ret);
    bool getAllNewRegions(std::vector<Region *>&ret);
    //  change me to use a hash
@@ -506,6 +507,7 @@ class SYMTAB_EXPORT Symtab : public LookupInterface,
    std::vector<Region *> regions_;
    std::vector<Region *> codeRegions_;
    std::vector<Region *> dataRegions_;
+   std::vector<Region *> ptxRegions_;
    dyn_hash_map <Offset, Region *> regionsByEntryAddr;
 
    //Point where new loadable sections will be inserted

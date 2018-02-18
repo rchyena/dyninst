@@ -78,6 +78,7 @@ class SYMTAB_EXPORT Region : public AnnotatableSparse {
       RT_DYNAMIC,
       RT_HASH,
       RT_GNU_HASH,
+      RT_PTX,
       RT_OTHER,
       RT_INVALID = -1
    };
@@ -140,6 +141,7 @@ class SYMTAB_EXPORT Region : public AnnotatableSparse {
 		   const char *tag = "Region") THROW_SPEC (SerializerError);
 
    Symtab *symtab() const { return symtab_; }
+   void *ptxPtrByIndex(Offset index);
    protected:                     
    Region(unsigned regnum, std::string name, Offset diskOff,
 			unsigned long diskSize, Offset memOff, unsigned long memSize,
@@ -164,6 +166,7 @@ class SYMTAB_EXPORT Region : public AnnotatableSparse {
    bool isTLS_;
    unsigned long memAlign_;
    Symtab *symtab_;
+   dyn_hash_map<Offset, Offset> ptxIndexMap;
 };
 
 }//namespace SymtabAPI

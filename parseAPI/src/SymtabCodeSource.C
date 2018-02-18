@@ -116,9 +116,15 @@ SymtabCodeRegion::getPtrToInstruction(const Address addr) const
 {
     if(!contains(addr)) return NULL;
 
-    if(isCode(addr))
-        return (void*)((Address)_region->getPtrToRawData() + 
-                       addr - _region->getMemOffset());
+    if(isCode(addr)) {
+        if (_region->getRegionType() == SymtabAPI::Region::RT_PTX) {
+            return _region->ptxPtrByIndex((Offset)addr);
+        }
+        else {
+            return (void*)((Address)_region->getPtrToRawData() + 
+                           addr - _region->getMemOffset());
+        }
+    }
     else if(isData(addr))
         return getPtrToData(addr);
     else
@@ -146,6 +152,9 @@ SymtabCodeRegion::getAddressWidth() const
 Architecture
 SymtabCodeRegion::getArch() const
 {
+    if (_region->getRegionType() == SymtabAPI::Region::RT_PTX)
+        return Dyninst::Arch_ptx;
+
     return _symtab->getArchitecture();
 }
 
@@ -163,6 +172,7 @@ SymtabCodeRegion::isCode(const Address addr) const
     return !_region->isBSS() && 
            (_region->getRegionType() == SymtabAPI::Region::RT_TEXT ||
             _region->getRegionType() == SymtabAPI::Region::RT_TEXTDATA ||
+            _region->getRegionType() == SymtabAPI::Region::RT_PTX ||
             (_symtab->isDefensiveBinary() && _region->isLoadable()) );
 }
 
@@ -196,6 +206,9 @@ SymtabCodeRegion::offset() const
 Address
 SymtabCodeRegion::length() const
 {
+    if (_region->getRegionType() == SymtabAPI::Region::RT_PTX)
+        return _region->getMemSize();
+
     return _region->getDiskSize();
 }
 
@@ -387,6 +400,7 @@ SymtabCodeSource::init_regions(hint_filt * filt , bool allLoadedRegions)
     dyn_hash_map<void*,CodeRegion*> rmap;
     vector<SymtabAPI::Region *> regs;
     vector<SymtabAPI::Region *> dregs;
+    vector<SymtabAPI::Region *> ptxregs;
     vector<SymtabAPI::Region *>::iterator rit;
 
     if ( ! allLoadedRegions ) {
@@ -409,7 +423,8 @@ SymtabCodeSource::init_regions(hint_filt * filt , bool allLoadedRegions)
         if(false == allLoadedRegions &&
            rt != SymtabAPI::Region::RT_TEXT &&
            rt != SymtabAPI::Region::RT_DATA &&
-           rt != SymtabAPI::Region::RT_TEXTDATA)
+           rt != SymtabAPI::Region::RT_TEXTDATA &&
+           rt != SymtabAPI::Region::RT_PTX)
         {
             parsing_printf(" [skipped]\n");
             continue;
@@ -436,6 +451,22 @@ SymtabCodeSource::init_regions(hint_filt * filt , bool allLoadedRegions)
     // because there is currently no per-Region lookup of functions in
     // SymtabAPI.
     init_hints(rmap,filt);
+/*
+    // Handle PTX region hints.
+    parsing_printf("[%s:%d] processing %d ptx fatbin regions in %s\n",
+        FILE__,__LINE__,ptxregs.size(),_symtab->name().c_str());
+    for (rit = ptxregs.begin(); rit != ptxregs.end(); ++rit) {
+        parsing_printf("   %s", (*rit)->getRegionName().c_str());
+
+        if(HASHDEF(rmap,*rit)) {
+            parsing_printf("[%s:%d] duplicate region at address %lx\n",
+                FILE__,__LINE__,(*rit)->getMemOffset());
+        }
+        CodeRegion * cr = new SymtabCodeRegion(_symtab,*rit);
+        rmap[*rit] = cr;
+        addRegion(cr);
+    }
+*/
 }
 
 void
@@ -445,6 +476,7 @@ SymtabCodeSource::init_hints(dyn_hash_map<void*, CodeRegion*> & rmap,
     vector<SymtabAPI::Function *> fsyms;
     vector<SymtabAPI::Function *>::iterator fsit;
     dyn_hash_map<Address,bool> seen;
+    dyn_hash_map<void*,CodeRegion*> ptx_regions;
     int dupes = 0;
 
     if(!_symtab->getAllFunctions(fsyms))
@@ -460,6 +492,7 @@ SymtabCodeSource::init_hints(dyn_hash_map<void*, CodeRegion*> & rmap,
                 (*fsit)->getFirstSymbol()->getPrettyName().c_str());
             continue;
         }
+
 		/*Achin added code starts 12/15/2014*/
 		if(!strcmp((*fsit)->getFirstSymbol()->getPrettyName().c_str(),"_non_rtti_object::`vftable'") || !strcmp((*fsit)->getFirstSymbol()->getPrettyName().c_str(),"bad_cast::`vftable'") || !strcmp((*fsit)->getFirstSymbol()->getPrettyName().c_str(),"exception::`vftable'") || !strcmp((*fsit)->getFirstSymbol()->getPrettyName().c_str(),"bad_typeid::`vftable'") || !strcmp((*fsit)->getFirstSymbol()->getPrettyName().c_str(),"sys_errlist"))
 		{
@@ -472,6 +505,29 @@ SymtabCodeSource::init_hints(dyn_hash_map<void*, CodeRegion*> & rmap,
 		}
 		/*Achin added code ends*/
 
+        SymtabAPI::Region * sr = (*fsit)->getRegion();
+
+        if(sr && sr->getRegionType() == SymtabAPI::Region::RT_PTX) {
+            fprintf(stderr,"Here too.\n");
+        }
+/*
+            CodeRegion * cr;
+            
+            if(HASHDEF(ptx_regions,sr)) {
+                cr = ptx_regions[sr];
+            }
+            else {
+                cr = new SymtabCodeRegion(_symtab, sr);
+                ptx_regions[sr] = cr;
+            }
+
+            _hints.push_back( Hint((*fsit)->getOffset(), cr,
+                                   (*fsit)->getName()) );
+            parsing_printf("[%s:%d] adding PTX function hint for %s\n",
+                           FILE__,__LINE__,(*fsit)->getName().c_str());
+            continue;
+        }
+*/
         if(HASHDEF(seen,(*fsit)->getOffset())) {
             // XXX it looks as though symtabapi now does de-duplication
             //     of function symbols automatically, so this code should
@@ -485,7 +541,6 @@ SymtabCodeSource::init_hints(dyn_hash_map<void*, CodeRegion*> & rmap,
         }
         seen[(*fsit)->getOffset()] = true;
 
-        SymtabAPI::Region * sr = (*fsit)->getRegion();
         if(!sr) {
             parsing_printf("[%s:%d] missing Region in function at %lx\n",
                 FILE__,__LINE__,(*fsit)->getOffset());
@@ -515,6 +570,55 @@ SymtabCodeSource::init_hints(dyn_hash_map<void*, CodeRegion*> & rmap,
         }
     }
     sort(_hints.begin(), _hints.end());
+}
+#if 1
+void
+SymtabCodeSource::init_ptx_hints(dyn_hash_map<void*, CodeRegion*>& rmap,
+    hint_filt * filt)
+{
+#else
+void
+SymtabCodeSource::init_ptx_hints(dyn_hash_map<void*, CodeRegion*>& rmap,
+    hint_filt * filt)
+{
+    std::vector<SymtabAPI::Region*> ptxregs;
+    vector<SymtabAPI::Region*>::iterator rit;
+    vector<SymtabAPI::Function *>::iterator fsit;
+    dyn_hash_map<Address, bool> seen;
+    int dupes = 0;
+
+    if (!_symtab->getPtxRegions(ptxregs))
+        return;
+
+    parsing_printf("[%s:%d] generating PTX hints\n", FILE__,__LINE__);
+    for (rit = ptxregs.begin(); rit != ptxregs.end(); ++rit) {
+        SymtabAPI::Region* sr = (*fsit)->getRegion();
+        if (!sr) {
+            parsing_printf("[%s:%d] missing Region in function at %lx\n",
+                FILE__,__LINE__,(*fsit)->getOffset());
+            continue;
+        }
+        if (!HASHDEF(rmap,sr)) {
+            parsing_printf("[%s:%d] unrecognized Region %lx in function %lx\n",
+                FILE__,__LINE__,sr->getMemOffset(),(*fsit)->getOffset());
+            continue;
+        }
+
+        CodeRegion* cr = rmap[sr];
+    }
+    else {
+            _hints.push_back( Hint((*fsit)->getOffset(),
+                                   cr,
+                                   (*fsit)->getFirstSymbol()->getPrettyName()) );
+            parsing_printf("\t<%lx,%s,[%lx,%lx)>\n",
+                (*fsit)->getOffset(),
+                (*fsit)->getFirstSymbol()->getPrettyName().c_str(),
+                cr->offset(),
+                cr->offset()+cr->length());
+        }
+    }
+    sort(_hints.begin(), _hints.end());
+#endif
 }
 
 void

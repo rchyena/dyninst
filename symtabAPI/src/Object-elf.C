@@ -5260,7 +5260,7 @@ static char* extract_fatbin(std::string fatbin)
     return buf;
 }
 
-static int extract_ptx_data(char** buf, char** arch, char** ptx, int* len)
+static int extract_ptx_text(char** buf, char** arch, char** ptx, int* len)
 {
     char* ptr;
     int   lbound, rbound;
@@ -5268,7 +5268,7 @@ static int extract_ptx_data(char** buf, char** arch, char** ptx, int* len)
     // Find next PTX file.
     ptr = strstr(*buf, "\nFatbin ptx ");
     if (!ptr) {
-        *buf = ptr + strlen(ptr);
+        *buf += strlen(*buf);
         return 0;
     }
 
@@ -5296,6 +5296,191 @@ static int extract_ptx_data(char** buf, char** arch, char** ptx, int* len)
     return 1;
 }
 
+/*
+static int skip_ptx_insn(const char* buf)
+{
+    static const char* insn[] = {
+        " 24%n",       " abs%n",      " add%n",       " addc%n",
+        " and%n",      " atom%n",     " bar%n",       " bfe%n",
+        " bfi%n",      " bfind%n",    " bra%n",       " brev%n",
+        " brkpt%n",    " call%n",     " clz%n",       " cnot%n",
+        " copysign%n", " cos%n",      " cvt%n",       " cvta%n",
+        " div%n",      " ex2%n",      " exit%n",      " fma%n",
+        " isspacep%n", " ld%n",       " ldu%n",       " lg2%n",
+        " mad%n",      " mad24%n",    " madc%n",      " max%n",
+        " membar%n",   " min%n",      " mov%n",       " mul%n",
+        " mul%n",      " neg%n",      " not%n",       " or%n",
+        " pmevent%n",  " popc%n",     " prefetch%n",  " prefetchu%n",
+        " prmt%n",     " rcp%n",      " red%n",       " rem%n",
+        " ret%n",      " rsqrt%n",    " sad%n",       " selp%n",
+        " set%n",      " setp%n",     " shf%n",       " shfl%n",
+        " shl%n",      " shr%n",      " sin%n",       " slct%n",
+        " sqrt%n",     " st%n",       " sub%n",       " subc%n",
+        " suld%n",     " suq%n",      " sured%n",     " sust%n",
+        " testp%n",    " tex%n",      " tld4%n",      " trap%n",
+        " txq%n",      " vabsdiff%n", " vabsdiff2%n", " vabsdiff4%n",
+        " vadd%n",     " vadd2%n",    " vadd4%n",     " vavrg2%n",
+        " vavrg4%n",   " vmad%n",     " vmax%n",      " vmax2%n",
+        " vmax4%n",    " vmin%n",     " vmin2%n",     " vmin4%n",
+        " vote%n",     " vset%n",     " vset2%n",     " vset4%n", 
+        " vshl%n",     " vshr%n",     " vsub%n",      " vsub2%n",
+        " vsub4%n",    " xor%n",
+        NULL
+    };
+    int i;
+
+    for (i = 0; *insn[i]; ++i) {
+        const char* ptr = buf;
+        int span  = -1;
+        int check = 0;
+        sscanf(ptr, insn[i], &span);
+        if (span == -1)
+            continue;
+        ptr += span;
+
+        if (! (('0' <= *ptr && *ptr <= '9') ||
+               ('A' <= *ptr && *ptr <= 'Z') ||
+               ('a' <= *ptr && *ptr <= 'z') ||
+               ('_' == *ptr) ||
+               ('$' == *ptr)))
+            return span;
+    } 
+    
+}
+*/
+/*
+static char* find_ptx_token(char* buf)
+{
+    int span;
+    char* head = buf;
+    char* tail;
+
+    do {
+        sscanf(head, " ", &span);
+        head += span;
+
+        span = -1;
+        switch (*head) {
+        case '.':
+            sscanf(head, ".%*[a-z_] %n", &span);
+            
+        case '%':
+        case '_':
+        case '$':
+        default:
+        }
+
+        span = -1;
+        sscanf(head, " .%*[a-z_] %n", &span);
+        if (span != -1)
+            head += span;
+    }
+    while (span != -1);
+
+    span = -1;
+    sscanf(head, "%*[a-zA-Z]%*[A-Za-z0-9_");
+}
+*/
+enum ptxSymbolType {
+    DYN_PTX_ENTRY = 0,
+    DYN_PTX_FUNC,
+    DYN_PTX_GLOBAL,
+
+    DYN_PTX_MAXVAL
+};
+
+static Symbol* extract_ptx_symbol(char* buf, char** curr)
+{
+    char* ptr = *curr;
+    char* line;
+    int i, next;
+    char* directive[ DYN_PTX_MAXVAL ];
+    Symbol* retval = NULL;
+
+    if (!ptr || *ptr == '\0')
+        return NULL;
+
+    directive[ DYN_PTX_ENTRY  ] = strstr(ptr, ".entry ");
+    directive[ DYN_PTX_FUNC   ] = strstr(ptr, ".func ");
+    directive[ DYN_PTX_GLOBAL ] = strstr(ptr, ".global ");
+
+    next = -1;
+    for (i = 0; i < DYN_PTX_MAXVAL; ++i) {
+        if (directive[i] && (next == -1 || directive[next] > directive[i]))
+            next = i;
+    }
+
+    if (next != -1) {
+        int start, len;
+        std::string name;
+        Symbol::SymbolType stype;
+
+        ptr = directive[next];
+
+        switch (next) {
+        case DYN_PTX_ENTRY:
+        case DYN_PTX_FUNC:
+            if (next == DYN_PTX_ENTRY) {
+                ptr += strlen(".entry ");
+            }
+            else {
+                ptr += strlen(".func ");
+                while (1) {
+                    start = -1;
+                    sscanf(ptr, " (.param %*[^)])%n", &start);
+                    if (start == -1)
+                        break;
+
+                    ptr += start;
+                }
+            }
+            sscanf(ptr, " %n%*[^(]%n", &start, &len);
+            name = std::string(ptr + start, len - 1);
+            stype = Symbol::ST_FUNCTION;
+            ptr += start + len;
+            break;
+
+        case DYN_PTX_GLOBAL:
+            ptr += strlen(".global ");
+            while (1) {
+                start = -1;
+                sscanf(ptr, " .%*s %*[0-9]%n", &start);
+                if (start == -1)
+                    sscanf(ptr, " .%*s%n", &start);
+
+                if (start == -1)
+                    break;
+
+                ptr += start;
+            }
+            sscanf(ptr, " %n%*[^[;]%n", &start, &len);
+            name = std::string(ptr + start, len - 1);
+            stype = Symbol::ST_OBJECT;
+            ptr += start + len;
+            break;
+
+        default:
+            break;
+        }
+
+        line = ptr;
+        while (line > buf && *(line - 1) != '\n')
+            --line;
+
+        parsing_printf("%s[%d]: Adding PTX symbol '%s' from line '%s'\n",
+                       FILE__, __LINE__, name.c_str(), line);
+
+        retval = new Symbol(name,
+                            stype,
+                            Symbol::SL_GLOBAL,
+                            Symbol::SV_INTERNAL,
+                            reinterpret_cast<Offset>(line));
+    }
+
+    *curr = ptr;
+    return retval;
+}
+
 void Object::parse_fatbin(Elf_X_Shdr* fatbin_hdr)
 {
     assert(fatbin_hdr);
@@ -5306,26 +5491,48 @@ void Object::parse_fatbin(Elf_X_Shdr* fatbin_hdr)
     if (!buf)
         return;
 
-    int   count = 0;
-    char* ptr   = buf;
-    char* arch;
-    char* ptx;
-    int   len;
+    int    globalIdx = 0;
+    int    regionIdx = 0;
+    char*  ptr   = buf;
+    char*  arch;
+    char*  ptx;
+    int    len;
 
-    while ( extract_ptx_data(&ptr, &arch, &ptx, &len)) {
-        std::string fname = mf->filename()
-            + "." + std::to_string(++count)
-            + "." + arch + ".ptx";
+    while (extract_ptx_text(&ptr, &arch, &ptx, &len)) {
+        ++regionIdx;
+        ++globalIdx;
+        std::string fname = mf->filename() +
+            "." + std::to_string(regionIdx) +
+            "." + arch + ".ptx";
+        Region* reg = new Region(static_cast<unsigned>(-globalIdx),
+                                 fname,
+                                 static_cast<Offset>(ptx - buf),
+                                 len,
+                                 globalIdx,
+                                 0,
+                                 buf,
+                                 Region::RP_R,
+                                 Region::RT_PTX);
+        Symbol* sym;
+        char* symptr = ptx;
+        Offset localIdx = 0;
 
-        regions_.push_back(new Region(count,
-                                      fname,
-                                      0,
-                                      len,
-                                      0,
-                                      0,
-                                      ptx,
-                                      Region::RP_R,
-                                      Region::RT_INVALID));
+        do {
+            sym = extract_ptx_symbol(buf, &symptr);
+            if (sym) {
+                ++localIdx;
+                ++globalIdx;
+                reg->ptxIndexMap[ globalIdx ] = sym->offset_;
+                sym->offset_ = globalIdx;
+                sym->region_ = reg;
+                symbols_[sym->getMangledName()].push_back(sym);
+            }
+        }
+        while (sym);
+
+        reg->memSize_ = localIdx;
+        fprintf(stderr, "Adding PTX Region: [%04d, %04d) %s\n", reg->memOff_, reg->memSize_, fname.c_str());
+        regions_.push_back(reg);
     }
 }
 
